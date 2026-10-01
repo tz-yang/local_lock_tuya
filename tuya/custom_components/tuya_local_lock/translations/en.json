@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tuya Local Lock",
+        "description": "Enter the local connection info of the lock. Leave IP empty to auto-discover on LAN (UDP 6666).",
+        "data": {
+          "name": "Device Name",
+          "device_id": "Device ID",
+          "local_key": "Local Key",
+          "ip": "IP Address (leave empty to auto-discover)",
+          "uuid": "UUID (optional)",
+          "product_id": "Product ID (optional)",
+          "protocol": "Tuya Protocol Version"
+        }
+      }
+    },
+    "error": {
+      "no_device_found": "Device not found on LAN. Make sure the lock is online or enter its IP manually.",
+      "cannot_connect": "Failed to connect. Check Device ID, Local Key and protocol version."
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Lock DP Settings",
+        "data": {
+          "state_dp": "State DP index (default 1)",
+          "state_true_is_locked": "State DP true means locked",
+          "command_dp": "Command DP index (default 1)",
+          "command_lock_value": "Value sent to lock (true)",
+          "command_unlock_value": "Value sent to unlock (false)",
+          "open_dp": "Open (temporary unlock) DP index (0 = disabled)",
+          "open_value": "Value sent for open",
+          "battery_dp": "Battery level DP index (0 = disabled)",
+          "unlock_dp_list": "Unlock event DP list (comma-separated, e.g. 2,3)",
+          "unlock_user_map": "Member ID mapping (one per line: id=name (method))",
+          "doorbell_dp": "Doorbell DP index (0 = disabled)",
+          "auto_relock_delay": "Auto relock delay in seconds (0 = disabled)",
+          "poll_interval": "Polling interval (seconds)",
+          "debug_capture": "Debug: capture raw broadcast packets",
+          "broadcast_history": "Save broadcast history (persisted across restarts)"
+        }
+      }
+    }
+  }
+}

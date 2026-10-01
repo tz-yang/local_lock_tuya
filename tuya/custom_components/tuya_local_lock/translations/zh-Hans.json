@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "涂鸦本地门锁",
+        "description": "填入门锁的本地连接信息。IP 留空将在局域网内自动发现（UDP 6666）。",
+        "data": {
+          "name": "设备名称",
+          "device_id": "Device ID（设备 ID）",
+          "local_key": "Local Key（本地密钥）",
+          "ip": "IP 地址（留空自动发现）",
+          "uuid": "UUID（可选）",
+          "product_id": "Product ID（产品 ID，可选）",
+          "protocol": "涂鸦协议版本"
+        }
+      }
+    },
+    "error": {
+      "no_device_found": "局域网内未发现该设备，请确认门锁已联网，或手动填写 IP 地址。",
+      "cannot_connect": "连接门锁失败，请检查 Device ID、Local Key 和协议版本是否正确。"
+    },
+    "abort": {
+      "already_configured": "该设备已被配置过。"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "门锁 DP 设置",
+        "data": {
+          "state_dp": "状态 DP 编号（默认 1）",
+          "state_true_is_locked": "状态 DP 为 true 时表示已上锁",
+          "command_dp": "控制 DP 编号（默认 1）",
+          "command_lock_value": "上锁时发送的值（true）",
+          "command_unlock_value": "解锁时发送的值（false）",
+          "open_dp": "临时开门 DP 编号（0 = 不启用开锁键）",
+          "open_value": "临时开门发送的值",
+          "battery_dp": "电量 DP 编号（0 = 不启用）",
+          "unlock_dp_list": "解锁记录 DP 列表（英文逗号分隔，如 2,3）",
+          "unlock_user_map": "成员编号映射（每行一条：编号=名字（方式））",
+          "doorbell_dp": "门铃 DP 编号（0 = 不启用）",
+          "auto_relock_delay": "自动回锁延迟（秒，0 = 不自动回锁）",
+          "poll_interval": "状态轮询间隔（秒）",
+          "debug_capture": "调试：捕获广播原始报文",
+          "broadcast_history": "保存广播历史（重启不丢）"
+        },
+        "data_description": {
+          "state_dp": "大多数涂鸦门锁使用 DP 1 表示锁状态。",
+          "command_dp": "大多数涂鸦门锁使用 DP 1 控制上锁/解锁。",
+          "open_dp": "部分门锁支持临时解锁（如 DP 12），不支持请保持 0。",
+          "battery_dp": "剩余电量百分比所在的 DP 编号，可在涂鸦开发者后台设备日志中查询。",
+          "unlock_dp_list": "涂鸦门锁的开锁事件推送 DP，每次开锁该 DP 的值会变成「方式 + 编号」（如 2 号指纹）。多个 DP 用英文逗号分隔。",
+          "unlock_user_map": "把 DP 值映射成友好名称。每行一条，格式：编号=名字（方式）。例如：\n1=爸爸（指纹）\n2=爸爸（人脸）\n3=保姆（指纹）\n\n没命中的编号直接显示原始值。",
+          "doorbell_dp": "门铃功能点（doorbell，Boolean 型）的 DP 编号。填写后：门铃响时触发「门铃」传感器和事件，且门铃唤醒不再被误记为开锁。0 = 不启用。",
+          "broadcast_history": "开启后收到的本设备广播（含时间、端口、hex 和解码内容）会持久化到 HA 存储，重启/断电不丢失，最多保留 200 条，可在「广播调试」传感器的 history 属性中查看。关闭后不再写入（已有历史文件保留）。",
+          "auto_relock_delay": "检测到解锁事件后多少秒自动把状态切回已锁定，0 表示不切回。"
+        }
+      }
+    }
+  }
+}

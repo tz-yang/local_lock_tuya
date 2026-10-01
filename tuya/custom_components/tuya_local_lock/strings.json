@@ -1,0 +1,54 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tuya Local Lock",
+        "description": "Enter the local connection info of the lock. Leave IP empty to auto-discover on LAN (UDP 6666).",
+        "data": {
+          "name": "Device Name",
+          "device_id": "Device ID",
+          "local_key": "Local Key",
+          "ip": "IP Address (leave empty to auto-discover)",
+          "uuid": "UUID (optional)",
+          "product_id": "Product ID (optional)",
+          "protocol": "Tuya Protocol Version"
+        }
+      }
+    },
+    "error": {
+      "no_device_found": "Device not found on LAN. Make sure the lock is online or enter its IP manually.",
+      "cannot_connect": "Failed to connect. Check Device ID, Local Key and protocol version."
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Lock DP Settings",
+        "data": {
+          "state_dp": "State DP index (0 = use unlock events)",
+          "state_true_is_locked": "State DP true means locked",
+          "command_dp": "Command DP index (default 1)",
+          "command_lock_value": "Value sent to lock (true)",
+          "command_unlock_value": "Value sent to unlock (false)",
+          "open_dp": "Open (temporary unlock) DP index (0 = disabled)",
+          "open_value": "Value sent for open",
+          "battery_dp": "Battery level DP index (0 = disabled)",
+          "unlock_dp_list": "Unlock event DPs (comma-separated, e.g. 2,3,4)",
+          "auto_relock_delay": "Auto relock delay after unlock event (seconds, 0 = off)",
+          "poll_interval": "Polling interval (seconds)"
+        },
+        "data_description": {
+          "state_dp": "Set to 0 for event-based locks that only report unlock events. Otherwise use the DP index for lock state.",
+          "command_dp": "DP used to send lock/unlock commands locally.",
+          "open_dp": "Some locks support temporary unlock (e.g. DP 12). Keep 0 if not supported.",
+          "battery_dp": "DP index for battery percentage (0-100). Set to 0 to disable.",
+          "unlock_dp_list": "DP indices that report unlock events. When their value changes, the lock is considered unlocked.",
+          "auto_relock_delay": "For auto-locking doors, restore 'locked' state N seconds after an unlock event."
+        }
+      }
+    }
+  }
+}
