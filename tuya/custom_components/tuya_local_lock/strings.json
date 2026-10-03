@@ -36,9 +36,18 @@
           "open_dp": "Open (temporary unlock) DP index (0 = disabled)",
           "open_value": "Value sent for open",
           "battery_dp": "Battery level DP index (0 = disabled)",
-          "unlock_dp_list": "Unlock event DPs (comma-separated, e.g. 2,3,4)",
+          "unlock_dp_list": "Unlock event DPs (comma-separated, e.g. 1)",
+          "unlock_user_map": "Member ID mapping (one per line: id=name (method))",
+          "doorbell_dp": "Doorbell DP index (0 = disabled)",
           "auto_relock_delay": "Auto relock delay after unlock event (seconds, 0 = off)",
-          "poll_interval": "Polling interval (seconds)"
+          "poll_interval": "Polling interval (seconds)",
+          "wake_refresh_delay": "Wake fetch delay (seconds, 0 = immediate)",
+          "wake_refresh_retry": "Retry delay on fetch failure (seconds, 0 = no retry)",
+          "debug_capture": "Debug: capture raw broadcast packets",
+          "broadcast_history": "Save broadcast history (persisted across restarts)",
+          "tcp_push_probe": "Probe for unsolicited TCP push frames",
+          "external_state_entity": "External state entity (e.g. door contact sensor)",
+          "external_state_invert": "Invert external state (on = locked)"
         },
         "data_description": {
           "state_dp": "Set to 0 for event-based locks that only report unlock events. Otherwise use the DP index for lock state.",
@@ -46,7 +55,13 @@
           "open_dp": "Some locks support temporary unlock (e.g. DP 12). Keep 0 if not supported.",
           "battery_dp": "DP index for battery percentage (0-100). Set to 0 to disable.",
           "unlock_dp_list": "DP indices that report unlock events. When their value changes, the lock is considered unlocked.",
-          "auto_relock_delay": "For auto-locking doors, restore 'locked' state N seconds after an unlock event."
+          "unlock_user_map": "Map DP values to friendly names. One per line: id=name (method). Unmatched values show raw.",
+          "doorbell_dp": "DP index of the doorbell Boolean. Enables the doorbell sensor/event and prevents doorbell wake-ups from being logged as unlocks. 0 = disabled.",
+          "broadcast_history": "Persist this device's broadcasts (time, port, hex, decoded) to HA storage; keeps up to 200 entries, viewable in the broadcast debug sensor's history attribute.",
+          "tcp_push_probe": "On each wake-up, open an extra persistent TCP connection and silently listen for 12 seconds without sending requests; unsolicited frames are recorded in tcp_push_frames. Proves whether a long-connection architecture is possible.",
+          "auto_relock_delay": "For auto-locking doors, restore 'locked' state N seconds after an unlock event.",
+          "external_state_entity": "Entity ID of a binary sensor (e.g. door contact) whose state forces the lock display. When available, it overrides the lock's own DPS inference. Default: on = door open = unlocked.",
+          "external_state_invert": "Check if your sensor's 'on' means door closed/locked. When enabled: on = locked, off = unlocked."
         }
       }
     }

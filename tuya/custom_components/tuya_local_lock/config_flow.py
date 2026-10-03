@@ -17,6 +17,7 @@ from .const import (
     CONF_DEVICE_IP,
     CONF_DOORBELL_DP,
     CONF_BROADCAST_HISTORY,
+    CONF_TCP_PUSH_PROBE,
     CONF_LOCAL_KEY,
     CONF_OPEN_DP,
     CONF_OPEN_VALUE,
@@ -29,6 +30,10 @@ from .const import (
     CONF_UNLOCK_USER_MAP,
     CONF_UUID,
     CONF_DEBUG_CAPTURE,
+    CONF_WAKE_REFRESH_DELAY,
+    CONF_WAKE_REFRESH_RETRY,
+    CONF_EXTERNAL_STATE_ENTITY,
+    CONF_EXTERNAL_STATE_INVERT,
     DEFAULT_AUTO_RELOCK_DELAY,
     DEFAULT_BATTERY_DP,
     DEFAULT_COMMAND_DP,
@@ -39,6 +44,8 @@ from .const import (
     DEFAULT_PROTOCOL,
     DEFAULT_STATE_DP,
     DEFAULT_STATE_TRUE_IS_LOCKED,
+    DEFAULT_WAKE_REFRESH_DELAY,
+    DEFAULT_WAKE_REFRESH_RETRY,
     DOMAIN,
     PROTOCOLS,
 )
@@ -95,8 +102,17 @@ OPTIONS_SCHEMA = vol.Schema(
         vol.Required(CONF_POLL_INTERVAL, default=DEFAULT_POLL_INTERVAL): vol.All(
             vol.Coerce(int), vol.Range(min=5)
         ),
+        vol.Required(
+            CONF_WAKE_REFRESH_DELAY, default=DEFAULT_WAKE_REFRESH_DELAY
+        ): vol.All(vol.Coerce(float), vol.Range(min=0, max=10)),
+        vol.Required(
+            CONF_WAKE_REFRESH_RETRY, default=DEFAULT_WAKE_REFRESH_RETRY
+        ): vol.All(vol.Coerce(float), vol.Range(min=0, max=30)),
         vol.Optional(CONF_DEBUG_CAPTURE, default=False): bool,
         vol.Optional(CONF_BROADCAST_HISTORY, default=False): bool,
+        vol.Optional(CONF_TCP_PUSH_PROBE, default=False): bool,
+        vol.Optional(CONF_EXTERNAL_STATE_ENTITY, default=""): str,
+        vol.Optional(CONF_EXTERNAL_STATE_INVERT, default=False): bool,
     }
 )
 

@@ -1,0 +1,17 @@
+set_lock_state:
+  name: 设置门锁显示状态
+  description: 手动设置门锁实体的显示状态（已锁定/已解锁），不发送物理开锁指令。适用于通过门磁或其他传感器同步门锁状态。
+  fields:
+    locked:
+      name: 锁定状态
+      description: "true = 已锁定，false = 已解锁"
+      required: true
+      selector:
+        boolean:
+    device_id:
+      name: 设备 ID
+      description: 可选，指定目标门锁的设备 ID（涂鸦设备 ID）。不填则作用于所有门锁。
+      required: false
+      example: "eb1234567890abcdef12"
+      selector:
+        text:

@@ -41,8 +41,11 @@
           "doorbell_dp": "Doorbell DP index (0 = disabled)",
           "auto_relock_delay": "Auto relock delay in seconds (0 = disabled)",
           "poll_interval": "Polling interval (seconds)",
+          "wake_refresh_delay": "Wake fetch delay (seconds, 0 = immediate)",
+          "wake_refresh_retry": "Retry delay on fetch failure (seconds, 0 = no retry)",
           "debug_capture": "Debug: capture raw broadcast packets",
-          "broadcast_history": "Save broadcast history (persisted across restarts)"
+          "broadcast_history": "Save broadcast history (persisted across restarts)",
+          "tcp_push_probe": "Probe for unsolicited TCP push frames"
         }
       }
     }

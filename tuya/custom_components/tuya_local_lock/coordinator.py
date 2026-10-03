@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -25,10 +26,17 @@ from .const import (
     CONF_LOCAL_KEY,
     CONF_POLL_INTERVAL,
     CONF_PROTOCOL,
+    CONF_TCP_PUSH_PROBE,
+    CONF_WAKE_REFRESH_DELAY,
+    CONF_WAKE_REFRESH_RETRY,
     DEBUG_CAPTURE_MAX,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_PROTOCOL,
+    DEFAULT_WAKE_REFRESH_DELAY,
+    DEFAULT_WAKE_REFRESH_RETRY,
     DOMAIN,
+    TCP_PUSH_FRAMES_MAX,
+    TCP_PUSH_PROBE_SECONDS,
 )
 from .udp import TuyaUdpListener
 
@@ -114,9 +122,6 @@ async def validate_connection(hass: HomeAssistant, data: dict[str, Any]) -> str:
 
 
 class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    # 收到广播后延迟抓取的秒数（短防抖：连续广播只触发最早的一次）
-    WAKE_REFRESH_DELAY = 1.0
-
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         merged = {**entry.data, **entry.options}
         self._entry = entry
@@ -127,6 +132,16 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._listener: TuyaUdpListener | None = None
         self._has_connected = False
         self._wake_refresh_unsub: Callable[[], None] | None = None
+        # 唤醒广播后延迟抓取的秒数（给门锁 TCP 服务留就绪时间；同时作短防抖，
+        # 连续广播只触发最早的一次）；0 表示收到广播立即抓取
+        self._wake_refresh_delay: float = float(
+            merged.get(CONF_WAKE_REFRESH_DELAY, DEFAULT_WAKE_REFRESH_DELAY)
+        )
+        # 唤醒抓取失败后多少秒重试一次（0 = 不重试）
+        self._wake_refresh_retry: float = float(
+            merged.get(CONF_WAKE_REFRESH_RETRY, DEFAULT_WAKE_REFRESH_RETRY)
+        )
+        self._wake_retry_unsub: Callable[[], None] | None = None
         self._debug_capture: bool = merged.get(CONF_DEBUG_CAPTURE, False)
         # 环形缓冲区：每个元素 = {"ts": ISO 时间, ...}，上限 DEBUG_CAPTURE_MAX
         self._raw_captures: deque[dict[str, Any]] = deque(maxlen=DEBUG_CAPTURE_MAX)
@@ -138,6 +153,12 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._history_file = hass.config.path(
             ".storage", f"tuya_local_lock_history_{self._device_id}.json"
         )
+        # TCP 主动推送探测（唤醒窗口内开持久连接静默监听）
+        self._tcp_push_probe: bool = merged.get(CONF_TCP_PUSH_PROBE, False)
+        self._tcp_push_frames: deque[dict[str, Any]] = deque(
+            maxlen=TCP_PUSH_FRAMES_MAX
+        )
+        self._tcp_probe_running = False
         # 最近一次"唤醒广播触发抓取"的时间，用于识别同值重复开锁事件
         self._wake_triggered_at: datetime | None = None
         super().__init__(
@@ -262,6 +283,122 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def broadcast_history(self) -> list[dict[str, Any]]:
         return list(self._history)
 
+    @property
+    def tcp_push_probe_enabled(self) -> bool:
+        return self._tcp_push_probe
+
+    @property
+    def tcp_push_frames(self) -> list[dict[str, Any]]:
+        return list(self._tcp_push_frames)
+
+    @property
+    def tcp_probe_running(self) -> bool:
+        return self._tcp_probe_running
+
+    async def _async_tcp_push_probe(self) -> None:
+        """唤醒窗口内建立持久 TCP 连接，静默监听设备是否主动推帧。"""
+        self._tcp_probe_running = True
+        _LOGGER.info(
+            "TCP 推送探测开始：建立持久连接后静默监听 %d 秒",
+            TCP_PUSH_PROBE_SECONDS,
+        )
+        try:
+            frames = await asyncio.wait_for(
+                self.hass.async_add_executor_job(self._tcp_push_probe_blocking),
+                timeout=TCP_PUSH_PROBE_SECONDS + 12,
+            )
+        except asyncio.TimeoutError:
+            _LOGGER.warning("TCP 推送探测整体超时，未获得结论")
+            return
+        except Exception:
+            _LOGGER.exception("TCP 推送探测异常")
+            return
+        finally:
+            self._tcp_probe_running = False
+        for frame in frames:
+            self._tcp_push_frames.append(frame)
+        push_frames = [f for f in frames if f.get("unsolicited")]
+        if push_frames:
+            _LOGGER.info(
+                "TCP 推送探测：收到 %d 个主动推送帧（长连接路线可行）",
+                len(push_frames),
+            )
+        else:
+            _LOGGER.info("TCP 推送探测：静默期 0 个主动帧，该锁只被动应答")
+
+    def _tcp_push_probe_blocking(self) -> list[dict[str, Any]]:
+        """在执行器线程内：status() 建立持久连接 -> 静默 receive -> close。
+
+        新版 tinytuya（模块化后）没有 connect()，persist=True 时首次
+        status()/send() 会隐式建立并保持 TCP 连接。
+        """
+        dev = tinytuya.Device(
+            self._device_id,
+            address=self._ip,
+            local_key=self._data[CONF_LOCAL_KEY],
+            version=float(self._data.get(CONF_PROTOCOL, DEFAULT_PROTOCOL)),
+            persist=True,
+            connection_timeout=5,
+        )
+        frames: list[dict[str, Any]] = []
+        # status() 建立连接；其应答不算「主动推送」，仅用于确认连接成功
+        try:
+            initial = dev.status()
+        except Exception as exc:
+            _LOGGER.warning("TCP 推送探测 status() 抛出异常: %r", exc)
+            try:
+                dev.close()
+            except Exception:
+                pass
+            return frames
+        if isinstance(initial, dict) and (
+            initial.get("Error") or initial.get("Err")
+        ):
+            _LOGGER.warning("TCP 推送探测连接被拒: %s", initial)
+            try:
+                dev.close()
+            except Exception:
+                pass
+            return frames
+        _LOGGER.debug("TCP 推送探测连接已建立，初始应答: %s", initial)
+        deadline = time.monotonic() + TCP_PUSH_PROBE_SECONDS
+        next_heartbeat = time.monotonic() + 8
+        try:
+            while time.monotonic() < deadline:
+                # 监听中段发一次保活，避免设备单方面断开
+                if time.monotonic() >= next_heartbeat:
+                    try:
+                        dev.heartbeat(nowait=True)
+                    except Exception:
+                        pass
+                    next_heartbeat = time.monotonic() + 8
+                try:
+                    msg = dev.receive()
+                except Exception as exc:
+                    _LOGGER.debug("TCP 推送探测 receive 异常: %r", exc)
+                    continue
+                if msg:
+                    # 排除心跳应答，只保留设备主动推送的状态帧
+                    is_data = isinstance(msg, dict) and (
+                        "dps" in msg or msg.get("commandByte") == 7
+                    )
+                    entry = {
+                        "ts": datetime.now().isoformat(timespec="seconds"),
+                        "frame": msg,
+                        "unsolicited": is_data,
+                    }
+                    frames.append(entry)
+                    if is_data:
+                        _LOGGER.info("TCP 探测收到主动推送帧: %r", msg)
+                    else:
+                        _LOGGER.debug("TCP 探测收到非数据帧: %r", msg)
+        finally:
+            try:
+                dev.close()
+            except Exception:
+                pass
+        return frames
+
     async def async_load_history(self) -> None:
         """启动时从磁盘恢复广播历史。"""
         if self._history_loaded:
@@ -339,14 +476,34 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._wake_refresh_unsub is not None:
             # 已有待执行的唤醒刷新，保持最早的一次，尽快进入抓取
             return
+        if self._wake_refresh_delay <= 0:
+            self.hass.async_create_task(self._async_wake_refresh(None))
+            return
         self._wake_refresh_unsub = async_call_later(
-            self.hass, self.WAKE_REFRESH_DELAY, self._async_wake_refresh
+            self.hass, self._wake_refresh_delay, self._async_wake_refresh
         )
 
     async def _async_wake_refresh(self, _now: Any) -> None:
         self._wake_refresh_unsub = None
         _LOGGER.debug("门锁唤醒广播触发立即抓取状态")
         self._wake_triggered_at = dt_util.utcnow()
+        # 探测与状态抓取并行，避免刷新超时时探测错过唤醒窗口
+        if self._tcp_push_probe and not self._tcp_probe_running:
+            self.hass.async_create_task(self._async_tcp_push_probe())
+        await self.async_refresh()
+        if not self.last_update_success and self._wake_refresh_retry > 0:
+            # 首次抓取失败：门锁可能刚醒 TCP 未就绪，延迟后重试一次
+            if self._wake_retry_unsub is None:
+                _LOGGER.debug(
+                    "唤醒抓取失败，%.1f 秒后重试一次", self._wake_refresh_retry
+                )
+                self._wake_retry_unsub = async_call_later(
+                    self.hass, self._wake_refresh_retry, self._async_wake_retry
+                )
+
+    async def _async_wake_retry(self, _now: Any) -> None:
+        self._wake_retry_unsub = None
+        _LOGGER.debug("唤醒抓取重试")
         await self.async_refresh()
 
     def wake_triggered_within(self, seconds: float) -> bool:
@@ -359,6 +516,9 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._wake_refresh_unsub is not None:
             self._wake_refresh_unsub()
             self._wake_refresh_unsub = None
+        if self._wake_retry_unsub is not None:
+            self._wake_retry_unsub()
+            self._wake_retry_unsub = None
         # 取消待执行的防抖保存，立即同步落盘，避免最后几条广播丢失
         if self._history_save_unsub is not None:
             self._history_save_unsub()

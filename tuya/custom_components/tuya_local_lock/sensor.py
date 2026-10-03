@@ -19,9 +19,11 @@ from .const import (
     CONF_DEBUG_CAPTURE,
     CONF_DEVICE_ID,
     CONF_DOORBELL_DP,
+    CONF_TCP_PUSH_PROBE,
     CONF_UNLOCK_DP_LIST,
     CONF_UNLOCK_USER_MAP,
     DOMAIN,
+    TCP_PUSH_FRAMES_MAX,
 )
 from .coordinator import TuyaLockCoordinator
 
@@ -72,10 +74,14 @@ async def async_setup_entry(
         entities += [signal, record]
     if doorbell_dp:
         entities.append(TuyaLockDoorbell(coordinator, entry, doorbell_dp))
-    if coordinator._data.get(CONF_DEBUG_CAPTURE) or coordinator._data.get(
-        CONF_BROADCAST_HISTORY
-    ):
+    debug_any = (
+        coordinator._data.get(CONF_DEBUG_CAPTURE)
+        or coordinator._data.get(CONF_BROADCAST_HISTORY)
+        or coordinator._data.get(CONF_TCP_PUSH_PROBE)
+    )
+    if debug_any:
         entities.append(TuyaLockBroadcastDebug(coordinator, entry))
+        entities.append(TuyaLockBroadcastPlain(coordinator, entry))
     if entities:
         async_add_entities(entities)
 
@@ -376,28 +382,136 @@ class TuyaLockBroadcastDebug(CoordinatorEntity[TuyaLockCoordinator], SensorEntit
     def native_value(self) -> int:
         if self.coordinator.broadcast_history_enabled:
             return len(self.coordinator.broadcast_history)
+        if self.coordinator.tcp_push_probe_enabled:
+            return len(self.coordinator.tcp_push_frames)
         return len(self.coordinator.raw_captures)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any]
         if self.coordinator.broadcast_history_enabled:
-            return {
+            attrs = {
                 "history": self.coordinator.broadcast_history,
                 "max": BROADCAST_HISTORY_MAX,
                 "persisted": True,
             }
-        return {
-            "captures": self.coordinator.raw_captures,
-            "max": 50,
-            "persisted": False,
-        }
+        else:
+            attrs = {
+                "captures": self.coordinator.raw_captures,
+                "max": 50,
+                "persisted": False,
+            }
+        if self.coordinator.tcp_push_probe_enabled:
+            attrs["tcp_push_frames"] = self.coordinator.tcp_push_frames
+            attrs["tcp_push_max"] = TCP_PUSH_FRAMES_MAX
+            attrs["tcp_probe_running"] = self.coordinator.tcp_probe_running
+        return attrs
 
     @property
     def should_poll(self) -> bool:
         # 数据由 UDP 监听被动接收，coordinator 不感知，需要 HA 周期性拉取属性
         return True
 
+    async def async_update(self) -> None:
+        """空操作：覆写 CoordinatorEntity.async_update。
+
+        父类默认实现会触发 coordinator 发起 TCP 状态刷新，
+        门锁休眠时每次轮询都白等 10 秒超时并刷警告日志。
+        调试数据由 UDP 被动接收，轮询只需重读内存属性即可。
+        """
+
     @property
     def available(self) -> bool:
         # 即使 coordinator 处于失败状态（门锁休眠），调试数据仍可访问
+        return True
+
+
+def _summarize_payload(payload: dict[str, Any]) -> str:
+    """把解码后的广播内容压缩成一条短状态（HA 状态值上限 255 字符）。"""
+    if not isinstance(payload, dict):
+        return "无法摘要"
+    dps = payload.get("dps")
+    if isinstance(dps, dict) and dps:
+        parts = [f"{k}={v}" for k, v in dps.items()]
+        return "dps: " + ", ".join(parts)
+    active = payload.get("active")
+    version = payload.get("version")
+    if active is not None:
+        return f"心跳 active={active} version={version}"
+    # 其他结构（上线通告等），列出顶层键
+    keys = ",".join(k for k in payload if k not in ("ip", "gwId", "productKey"))
+    return f"通告 {keys}" if keys else "通告"
+
+
+class TuyaLockBroadcastPlain(CoordinatorEntity[TuyaLockCoordinator], SensorEntity):
+    """广播明文传感器：只存放解密后的内容，不含 hex。"""
+
+    _attr_has_entity_name = True
+    _attr_name = "广播明文"
+    _attr_icon = "mdi:text-box-check-outline"
+
+    def __init__(self, coordinator: TuyaLockCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.data[CONF_DEVICE_ID]}_broadcast_plain"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.data[CONF_DEVICE_ID])},
+            name=entry.data[CONF_NAME],
+            manufacturer="Tuya",
+        )
+
+    def _decoded_rows(self) -> list[dict[str, Any]]:
+        """从历史或内存缓冲中提取【本设备且解码成功】的记录（时间正序）。"""
+        if self.coordinator.broadcast_history_enabled:
+            source = self.coordinator.broadcast_history  # append 正序
+        else:
+            # raw_captures 为 appendleft 倒序，反转后正序
+            source = reversed(self.coordinator.raw_captures)
+        rows: list[dict[str, Any]] = []
+        for item in source:
+            decoded = item.get("decoded")
+            if item.get("is_mine") and isinstance(decoded, dict):
+                rows.append(
+                    {
+                        "ts": item.get("ts"),
+                        "port": item.get("port"),
+                        "payload": decoded,
+                    }
+                )
+        return rows
+
+    @property
+    def native_value(self) -> str:
+        rows = self._decoded_rows()
+        if rows:
+            return _summarize_payload(rows[-1]["payload"])
+        push = self.coordinator.tcp_push_frames
+        if push:
+            frame = push[-1].get("frame")
+            if isinstance(frame, dict) and "dps" in frame:
+                return _summarize_payload(frame)
+        return "暂无解密数据"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rows = self._decoded_rows()
+        attrs: dict[str, Any] = {
+            "decoded": rows,
+            "decoded_count": len(rows),
+            "persisted": self.coordinator.broadcast_history_enabled,
+        }
+        if self.coordinator.tcp_push_probe_enabled:
+            # TCP 推送帧已由 tinytuya 解密，同样属于明文数据
+            attrs["tcp_push_frames"] = self.coordinator.tcp_push_frames
+            attrs["tcp_probe_running"] = self.coordinator.tcp_probe_running
+        return attrs
+
+    @property
+    def should_poll(self) -> bool:
+        return True
+
+    async def async_update(self) -> None:
+        """空操作：同广播调试，避免轮询触发 coordinator 的 TCP 刷新。"""
+
+    @property
+    def available(self) -> bool:
         return True
