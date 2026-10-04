@@ -68,6 +68,8 @@ async def async_setup_entry(
     if unlock_dps:
         user_map = _parse_user_map(coordinator._data.get(CONF_UNLOCK_USER_MAP, ""))
         record = TuyaLockLastUnlock(coordinator, entry, unlock_dps, user_map)
+        # 注册给 coordinator，门磁 FSM 确认机械开门时写入同一份记录
+        coordinator.set_unlock_record(record)
         signal = TuyaLockUnlockSignal(
             coordinator, entry, unlock_dps, user_map, record, doorbell_dp
         )
@@ -193,6 +195,8 @@ class TuyaLockUnlockSignal(CoordinatorEntity[TuyaLockCoordinator], SensorEntity)
                 self._schedule_reset()
                 # 写入 B（开锁记录）
                 self._record.record(dp=dp, raw_value=current, display=display)
+                # 通知门磁 FSM：这是一次电子开锁（指纹/密码/App/室内按钮）
+                self.coordinator.notify_electronic_unlock()
                 # 广播事件：自动化可用事件触发器精确捕获每次开锁
                 self.hass.bus.async_fire(
                     f"{DOMAIN}_unlock_event",

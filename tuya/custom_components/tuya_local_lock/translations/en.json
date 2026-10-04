@@ -45,7 +45,21 @@
           "wake_refresh_retry": "Retry delay on fetch failure (seconds, 0 = no retry)",
           "debug_capture": "Debug: capture raw broadcast packets",
           "broadcast_history": "Save broadcast history (persisted across restarts)",
-          "tcp_push_probe": "Probe for unsolicited TCP push frames"
+          "tcp_push_probe": "Probe for unsolicited TCP push frames",
+          "external_state_entity": "External state entity (e.g. door contact)",
+          "external_state_invert": "Invert external state (on = locked)",
+          "manual_unlock_record": "Record mechanical openings via door contact",
+          "manual_unlock_name": "Manual unlock display name",
+          "manual_unlock_window": "Race window (seconds)",
+          "electronic_session_timeout": "Electronic session timeout (seconds)"
+        },
+        "data_description": {
+          "external_state_entity": "Entity ID of a binary sensor (e.g. door contact). When set, the lock display state is forced by this entity, overriding its own DPS inference. Default: on = door open = unlocked, off = door closed = locked. Leave empty to disable.",
+          "external_state_invert": "Check if your sensor's 'on' means door closed/locked. When enabled: on = locked, off = unlocked.",
+          "manual_unlock_record": "When the door contact opens without an electronic unlock signal within the race window, record it in 'Last unlock' as a mechanical indoor opening. Requires the external state entity above.",
+          "manual_unlock_name": "Friendly name shown for mechanical indoor openings.",
+          "manual_unlock_window": "After the door contact opens, wait this many seconds for an electronic unlock signal. No signal means a mechanical indoor opening.",
+          "electronic_session_timeout": "If the electronic unlock signal arrives first but the door is never opened, drop the session after this many seconds (prevents stale sessions)."
         }
       }
     }

@@ -34,14 +34,21 @@ from .const import (
     CONF_WAKE_REFRESH_RETRY,
     CONF_EXTERNAL_STATE_ENTITY,
     CONF_EXTERNAL_STATE_INVERT,
+    CONF_MANUAL_UNLOCK_RECORD,
+    CONF_MANUAL_UNLOCK_NAME,
+    CONF_MANUAL_UNLOCK_WINDOW,
+    CONF_SESSION_TIMEOUT,
     DEFAULT_AUTO_RELOCK_DELAY,
     DEFAULT_BATTERY_DP,
     DEFAULT_COMMAND_DP,
     DEFAULT_COMMAND_LOCK_VALUE,
     DEFAULT_COMMAND_UNLOCK_VALUE,
+    DEFAULT_MANUAL_UNLOCK_NAME,
+    DEFAULT_MANUAL_UNLOCK_WINDOW,
     DEFAULT_OPEN_VALUE,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_PROTOCOL,
+    DEFAULT_SESSION_TIMEOUT,
     DEFAULT_STATE_DP,
     DEFAULT_STATE_TRUE_IS_LOCKED,
     DEFAULT_WAKE_REFRESH_DELAY,
@@ -113,6 +120,17 @@ OPTIONS_SCHEMA = vol.Schema(
         vol.Optional(CONF_TCP_PUSH_PROBE, default=False): bool,
         vol.Optional(CONF_EXTERNAL_STATE_ENTITY, default=""): str,
         vol.Optional(CONF_EXTERNAL_STATE_INVERT, default=False): bool,
+        # 门磁识别室内机械开门并写入「最近开锁」
+        vol.Optional(CONF_MANUAL_UNLOCK_RECORD, default=True): bool,
+        vol.Optional(
+            CONF_MANUAL_UNLOCK_NAME, default=DEFAULT_MANUAL_UNLOCK_NAME
+        ): str,
+        vol.Required(
+            CONF_MANUAL_UNLOCK_WINDOW, default=DEFAULT_MANUAL_UNLOCK_WINDOW
+        ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=10)),
+        vol.Required(
+            CONF_SESSION_TIMEOUT, default=DEFAULT_SESSION_TIMEOUT
+        ): vol.All(vol.Coerce(float), vol.Range(min=1, max=30)),
     }
 )
 

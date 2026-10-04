@@ -45,7 +45,13 @@
           "wake_refresh_retry": "抓取失败重试延迟（秒，0 = 不重试）",
           "debug_capture": "调试：捕获广播原始报文",
           "broadcast_history": "保存广播历史（重启不丢）",
-          "tcp_push_probe": "探测门锁 TCP 主动推送帧"
+          "tcp_push_probe": "探测门锁 TCP 主动推送帧",
+          "external_state_entity": "外部状态来源实体（如门磁）",
+          "external_state_invert": "反转外部状态（on = 已锁）",
+          "manual_unlock_record": "门磁识别机械开门并记录",
+          "manual_unlock_name": "手动开锁显示名称",
+          "manual_unlock_window": "竞态窗口（秒）",
+          "electronic_session_timeout": "电子会话超时（秒）"
         },
         "data_description": {
           "state_dp": "大多数涂鸦门锁使用 DP 1 表示锁状态。",
@@ -59,7 +65,13 @@
           "wake_refresh_retry": "唤醒抓取失败（超时/被拒）后，多少秒再重试一次。0 = 不重试。建议配合上面的延迟使用，如 2 秒。",
           "broadcast_history": "开启后收到的本设备广播（含时间、端口、hex 和解码内容）会持久化到 HA 存储，重启/断电不丢失，最多保留 200 条，可在「广播调试」传感器的 history 属性中查看。关闭后不再写入（已有历史文件保留）。",
           "tcp_push_probe": "开启后每次门锁唤醒（刷指纹/按门铃）时，会额外建立一条持久 TCP 连接静默监听 12 秒（不发送任何请求），若设备主动推来数据帧则记录在「广播调试」传感器的 tcp_push_frames 属性中。探测到主动帧即可证明集成可升级为长连接架构。平时关闭。",
-          "auto_relock_delay": "检测到解锁事件后多少秒自动把状态切回已锁定，0 表示不切回。"
+          "auto_relock_delay": "检测到解锁事件后多少秒自动把状态切回已锁定，0 表示不切回。",
+          "external_state_entity": "填入门磁等 binary_sensor 的实体 ID。启用后，门锁显示状态完全由该实体决定（优先级高于门锁自身 DPS 推断）。默认 on = 门开 = 已解锁，off = 门关 = 已锁定。留空则不启用。",
+          "external_state_invert": "若你的门磁 on 表示门关/已锁，勾选此项反转。启用后：on = 已锁定，off = 已解锁。",
+          "manual_unlock_record": "门磁开启后，若竞态窗口内没有收到任何电子开锁信号（指纹/密码/App/室内按钮），则判定为室内机械开门并写入「最近开锁」。需先配置上方的外部状态实体。",
+          "manual_unlock_name": "室内机械开门时，「最近开锁」记录中显示的名称。",
+          "manual_unlock_window": "门磁开启后等待电子开锁信号的秒数。窗口内无信号即判定为室内机械开门。",
+          "electronic_session_timeout": "电子开锁信号先到但门始终没开时，多少秒后关闭该会话（防止会话残留）。"
         }
       }
     }

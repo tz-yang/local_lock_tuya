@@ -41,10 +41,25 @@ CONF_TCP_PUSH_PROBE = "tcp_push_probe"
 TCP_PUSH_PROBE_SECONDS = 12
 TCP_PUSH_FRAMES_MAX = 20
 
-# 外部状态来源实体（如门磁 binary_sensor），用于强制同步门锁显示状态
+# 外部状态来源实体（如门磁等），用于强制同步门锁显示状态
 CONF_EXTERNAL_STATE_ENTITY = "external_state_entity"
 # 外部状态反转：默认 on=门开=解锁，off=门关=锁定
 CONF_EXTERNAL_STATE_INVERT = "external_state_invert"
+
+# 门磁检测到室内机械开门时写入「最近开锁」记录
+CONF_MANUAL_UNLOCK_RECORD = "manual_unlock_record"
+# 手动开门记录的显示名称
+CONF_MANUAL_UNLOCK_NAME = "manual_unlock_name"
+# 门磁先开启时等待门锁信号的竞态窗口（秒）
+CONF_MANUAL_UNLOCK_WINDOW = "manual_unlock_window"
+# 门锁信号先到但门始终没开的会话兜底超时（秒）
+CONF_SESSION_TIMEOUT = "electronic_session_timeout"
+
+DEFAULT_MANUAL_UNLOCK_NAME = "手动开锁"
+DEFAULT_MANUAL_UNLOCK_WINDOW = 2
+DEFAULT_SESSION_TIMEOUT = 5
+# 门磁信号防抖：on 持续不足该秒数视为抖动忽略
+DOOR_DEBOUNCE_SECONDS = 1
 
 # 调试捕获环形缓冲区上限
 DEBUG_CAPTURE_MAX = 50

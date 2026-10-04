@@ -1,18 +1,18 @@
 """涂鸦本地门锁 - 锁实体。"""
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 import voluptuous as vol
 
 from homeassistant.components.lock import LockEntity, LockEntityFeature
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME, STATE_ON
+from homeassistant.const import CONF_NAME, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change
+from homeassistant.helpers.event import async_call_later, async_track_state_change
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -24,19 +24,33 @@ from .const import (
     CONF_DEVICE_IP,
     CONF_EXTERNAL_STATE_ENTITY,
     CONF_EXTERNAL_STATE_INVERT,
+    CONF_MANUAL_UNLOCK_NAME,
+    CONF_MANUAL_UNLOCK_RECORD,
+    CONF_MANUAL_UNLOCK_WINDOW,
     CONF_OPEN_DP,
     CONF_OPEN_VALUE,
     CONF_PRODUCT_ID,
     CONF_PROTOCOL,
+    CONF_SESSION_TIMEOUT,
     CONF_STATE_DP,
     CONF_STATE_TRUE_IS_LOCKED,
     CONF_UNLOCK_DP_LIST,
+    DEFAULT_MANUAL_UNLOCK_NAME,
+    DEFAULT_MANUAL_UNLOCK_WINDOW,
+    DEFAULT_SESSION_TIMEOUT,
+    DOOR_DEBOUNCE_SECONDS,
     DOMAIN,
     WAKE_OPERABLE_WINDOW,
 )
 from .coordinator import TuyaLockCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# 门磁 FSM 状态
+FSM_ARMED = "armed"              # 门关，等待机械开门判定
+FSM_PENDING = "pending"          # 门刚开，竞态窗口内等待电子开锁信号
+FSM_ELECTRONIC = "electronic"    # 电子开锁会话，关门后才重新武装
+FSM_MECHANICAL = "mechanical"    # 已确认室内机械开门
 
 SERVICE_SET_LOCK_STATE = "set_lock_state"
 ATTR_LOCKED = "locked"
@@ -111,6 +125,23 @@ class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
         self._external_state_entity: str = opts.get(CONF_EXTERNAL_STATE_ENTITY, "")
         self._external_state_invert: bool = opts.get(CONF_EXTERNAL_STATE_INVERT, False)
         self._external_unsub: Any = None
+        # 门磁 FSM：机械开门识别与记录
+        self._manual_enabled: bool = opts.get(CONF_MANUAL_UNLOCK_RECORD, True)
+        self._manual_name: str = (
+            opts.get(CONF_MANUAL_UNLOCK_NAME) or DEFAULT_MANUAL_UNLOCK_NAME
+        )
+        self._race_window: float = float(
+            opts.get(CONF_MANUAL_UNLOCK_WINDOW, DEFAULT_MANUAL_UNLOCK_WINDOW)
+        )
+        self._session_timeout: float = float(
+            opts.get(CONF_SESSION_TIMEOUT, DEFAULT_SESSION_TIMEOUT)
+        )
+        self._fsm: str = FSM_ARMED
+        self._door_open: bool = False
+        self._debounce_unsub: Callable[[], None] | None = None
+        self._race_unsub: Callable[[], None] | None = None
+        self._session_unsub: Callable[[], None] | None = None
+        self._remove_electronic_listener: Callable[[], None] | None = None
         self._attr_unique_id = entry.data[CONF_DEVICE_ID]
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.data[CONF_DEVICE_ID])},
@@ -132,15 +163,35 @@ class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
                 self._external_state_entity,
                 self._async_external_state_changed,
             )
-            # 初始化时读取一次当前状态
+            # 初始化时读取一次当前状态。
+            # 先设定门状态基线，启动瞬间不产生跳变事件（防止误记机械开门）
             state = self.hass.states.get(self._external_state_entity)
             if state is not None:
+                is_open = self._compute_is_open(state.state)
+                if is_open is not None:
+                    self._door_open = is_open
                 self._apply_external_state(state.state)
+            # 订阅电子开锁事件，驱动门磁 FSM
+            if self._manual_enabled:
+                self._remove_electronic_listener = (
+                    self.coordinator.add_electronic_unlock_listener(
+                        self._on_electronic_unlock
+                    )
+                )
 
     async def async_will_remove_from_hass(self) -> None:
         if self._external_unsub is not None:
             self._external_unsub()
             self._external_unsub = None
+        if self._remove_electronic_listener is not None:
+            self._remove_electronic_listener()
+            self._remove_electronic_listener = None
+        self._cancel_timer(self._debounce_unsub)
+        self._debounce_unsub = None
+        self._cancel_timer(self._race_unsub)
+        self._race_unsub = None
+        self._cancel_timer(self._session_unsub)
+        self._session_unsub = None
         _registered_locks.pop(self._entry.data[CONF_DEVICE_ID], None)
         await super().async_will_remove_from_hass()
 
@@ -152,23 +203,123 @@ class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
             return
         self._apply_external_state(new_state.state)
 
+    def _compute_is_open(self, state_str: str | None) -> bool | None:
+        """门磁状态 → 门是否开着（应用反转）。无效状态返回 None。"""
+        if state_str in ("unknown", "unavailable", None):
+            return None
+        is_open = state_str == STATE_ON
+        if self._external_state_invert:
+            is_open = not is_open
+        return is_open
+
     def _apply_external_state(self, state_str: str) -> None:
         """根据外部门磁状态强制更新门锁显示状态。
 
         默认：on = 门开 = 已解锁；off = 门关 = 已锁定。
         配置 invert 后反转。
         """
-        if state_str in ("unknown", "unavailable", None):
+        is_open = self._compute_is_open(state_str)
+        if is_open is None:
             return
-        is_open = state_str == STATE_ON
-        if self._external_state_invert:
-            is_open = not is_open
         self._unlocked = is_open
         # 门物理上开着时，取消自动回锁（保持解锁显示）
         if is_open and self._unlock_relock_timer is not None:
             self._unlock_relock_timer()
             self._unlock_relock_timer = None
         self.async_write_ha_state()
+        # FSM：门磁防抖后再提交跳变，避免抖动产生垃圾事件
+        if self._manual_enabled:
+            self._cancel_timer(self._debounce_unsub)
+            self._debounce_unsub = async_call_later(
+                self.hass,
+                DOOR_DEBOUNCE_SECONDS,
+                lambda _now: self._commit_door(is_open),
+            )
+
+    # ---- 门磁 FSM ----
+
+    @staticmethod
+    def _cancel_timer(unsub: Callable[[], None] | None) -> None:
+        if unsub is not None:
+            unsub()
+
+    @callback
+    def _commit_door(self, is_open: bool) -> None:
+        """防抖后提交门状态跳变。"""
+        self._debounce_unsub = None
+        if is_open == self._door_open:
+            return
+        self._door_open = is_open
+        if is_open:
+            self._door_opened()
+        else:
+            self._door_closed()
+
+    @callback
+    def _door_opened(self) -> None:
+        """门磁 off → on。"""
+        if self._fsm == FSM_ARMED:
+            # 竞态窗口内已有电子开锁信号 → 电子开门，门磁只是结果
+            if self.coordinator.electronic_unlock_within(self._race_window):
+                self._fsm = FSM_ELECTRONIC
+            else:
+                # 门磁先开：启动竞态窗口等待电子开锁信号
+                self._fsm = FSM_PENDING
+                self._race_unsub = async_call_later(
+                    self.hass, self._race_window, self._race_timeout
+                )
+        elif self._fsm == FSM_ELECTRONIC:
+            # 门锁信号先到、门磁后到：会话确认，取消兜底超时
+            self._cancel_timer(self._session_unsub)
+            self._session_unsub = None
+
+    @callback
+    def _door_closed(self) -> None:
+        """门磁 on → off：核心规则——关门 = 会话结束，重新武装。
+
+        门开多久都不会触发超时误报；关门后的下一次 off → on
+        才可能被判定为机械开门。
+        """
+        self._cancel_timer(self._race_unsub)
+        self._race_unsub = None
+        self._cancel_timer(self._session_unsub)
+        self._session_unsub = None
+        self._fsm = FSM_ARMED
+
+    @callback
+    def _on_electronic_unlock(self) -> None:
+        """收到电子开锁信号（指纹/密码/App/室内按钮）。"""
+        if self._fsm == FSM_PENDING:
+            # 门磁先开、门锁信号在竞态窗口内到达 → 电子开门
+            self._cancel_timer(self._race_unsub)
+            self._race_unsub = None
+            self._fsm = FSM_ELECTRONIC
+        elif self._fsm == FSM_ARMED:
+            # 门锁信号先到、门还没开：成立电子会话，启动兜底超时
+            # 防止"验证完没推门"导致会话永久挂起
+            self._fsm = FSM_ELECTRONIC
+            self._session_unsub = async_call_later(
+                self.hass, self._session_timeout, self._session_timeout_cb
+            )
+        # ELECTRONIC / MECHANICAL：忽略
+
+    async def _race_timeout(self, _now: Any) -> None:
+        """竞态窗口超时无电子开锁信号 → 室内机械开门。"""
+        self._race_unsub = None
+        if self._fsm != FSM_PENDING:
+            return
+        self._fsm = FSM_MECHANICAL
+        record = self.coordinator.unlock_record
+        if record is not None:
+            record.record(
+                dp="manual", raw_value="manual", display=self._manual_name
+            )
+
+    async def _session_timeout_cb(self, _now: Any) -> None:
+        """电子会话兜底超时（门锁信号到了但门始终没开）。"""
+        self._session_unsub = None
+        if self._fsm == FSM_ELECTRONIC:
+            self._fsm = FSM_ARMED
 
     def set_display_lock_state(self, locked: bool) -> None:
         """供服务调用：手动设置门锁显示状态（不发送物理指令）。"""

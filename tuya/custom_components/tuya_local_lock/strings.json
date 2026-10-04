@@ -47,7 +47,11 @@
           "broadcast_history": "Save broadcast history (persisted across restarts)",
           "tcp_push_probe": "Probe for unsolicited TCP push frames",
           "external_state_entity": "External state entity (e.g. door contact sensor)",
-          "external_state_invert": "Invert external state (on = locked)"
+          "external_state_invert": "Invert external state (on = locked)",
+          "manual_unlock_record": "Record mechanical openings via door contact",
+          "manual_unlock_name": "Manual unlock display name",
+          "manual_unlock_window": "Race window (seconds)",
+          "electronic_session_timeout": "Electronic session timeout (seconds)"
         },
         "data_description": {
           "state_dp": "Set to 0 for event-based locks that only report unlock events. Otherwise use the DP index for lock state.",
@@ -61,7 +65,11 @@
           "tcp_push_probe": "On each wake-up, open an extra persistent TCP connection and silently listen for 12 seconds without sending requests; unsolicited frames are recorded in tcp_push_frames. Proves whether a long-connection architecture is possible.",
           "auto_relock_delay": "For auto-locking doors, restore 'locked' state N seconds after an unlock event.",
           "external_state_entity": "Entity ID of a binary sensor (e.g. door contact) whose state forces the lock display. When available, it overrides the lock's own DPS inference. Default: on = door open = unlocked.",
-          "external_state_invert": "Check if your sensor's 'on' means door closed/locked. When enabled: on = locked, off = unlocked."
+          "external_state_invert": "Check if your sensor's 'on' means door closed/locked. When enabled: on = locked, off = unlocked.",
+          "manual_unlock_record": "When the door contact opens without an electronic unlock signal within the race window, record it in 'Last unlock' (mechanical indoor opening). Requires the external state entity above.",
+          "manual_unlock_name": "Friendly name shown for mechanical indoor openings.",
+          "manual_unlock_window": "After the door contact opens, wait this many seconds for an electronic unlock signal. No signal means a mechanical indoor opening.",
+          "electronic_session_timeout": "If the electronic unlock signal arrives first but the door is never opened, drop the session after this many seconds (prevents stale sessions)."
         }
       }
     }

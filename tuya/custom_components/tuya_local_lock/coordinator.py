@@ -161,6 +161,11 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._tcp_probe_running = False
         # 最近一次"唤醒广播触发抓取"的时间，用于识别同值重复开锁事件
         self._wake_triggered_at: datetime | None = None
+        # 电子开锁（指纹/密码/App/室内按钮）事件时间戳，供门磁 FSM 关联
+        self._electronic_unlock_at: datetime | None = None
+        self._electronic_unlock_listeners: list[Callable[[], None]] = []
+        # 「最近开锁」记录传感器引用，门磁确认机械开门时写入
+        self._unlock_record: Any = None
         super().__init__(
             hass,
             _LOGGER,
@@ -511,6 +516,41 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._wake_triggered_at is None:
             return False
         return dt_util.utcnow() - self._wake_triggered_at <= timedelta(seconds=seconds)
+
+    # ---- 门磁 FSM 支持 ----
+
+    def set_unlock_record(self, record: Any) -> None:
+        """注册「最近开锁」记录传感器。"""
+        self._unlock_record = record
+
+    @property
+    def unlock_record(self) -> Any:
+        return self._unlock_record
+
+    def add_electronic_unlock_listener(
+        self, listener: Callable[[], None]
+    ) -> Callable[[], None]:
+        """订阅电子开锁事件，返回取消订阅函数。"""
+        self._electronic_unlock_listeners.append(listener)
+
+        def _remove() -> None:
+            if listener in self._electronic_unlock_listeners:
+                self._electronic_unlock_listeners.remove(listener)
+
+        return _remove
+
+    @callback
+    def notify_electronic_unlock(self) -> None:
+        """电子开锁信号触发时调用：记录时间并通知门磁 FSM。"""
+        self._electronic_unlock_at = dt_util.utcnow()
+        for listener in list(self._electronic_unlock_listeners):
+            listener()
+
+    def electronic_unlock_within(self, seconds: float) -> bool:
+        """seconds 秒内是否发生过电子开锁。"""
+        if self._electronic_unlock_at is None:
+            return False
+        return dt_util.utcnow() - self._electronic_unlock_at <= timedelta(seconds=seconds)
 
     async def async_shutdown(self) -> None:
         if self._wake_refresh_unsub is not None:
