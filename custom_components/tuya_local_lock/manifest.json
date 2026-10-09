@@ -1,12 +1,12 @@
 {
   "domain": "tuya_local_lock",
   "name": "Tuya Local Lock",
-  "codeowners": ["@yang"],
+  "codeowners": ["@tz-yang"],
   "config_flow": true,
-  "documentation": "https://github.com/yang/tuya-local-lock",
+  "documentation": "https://github.com/tz-yang/local_lock_tuya",
   "integration_type": "device",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/yang/tuya-local-lock/issues",
+  "issue_tracker": "https://github.com/tz-yang/local_lock_tuya/issues",
   "loggers": ["tinytuya"],
   "requirements": ["tinytuya>=1.20.0"],
   "version": "1.2.2"
