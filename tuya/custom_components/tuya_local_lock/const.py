@@ -60,6 +60,10 @@ DEFAULT_MANUAL_UNLOCK_WINDOW = 2
 DEFAULT_SESSION_TIMEOUT = 5
 # 门磁信号防抖：on 持续不足该秒数视为抖动忽略
 DOOR_DEBOUNCE_SECONDS = 1
+# 唤醒会话间隔：距上一条本设备广播超过该秒数 → 新的唤醒会话。
+# 同一次开锁唤醒期内的多次抓取属于同一会话，只计一次；
+# 安静期后的再次开锁（即使 DP 值相同）属于新会话，正常计数。
+WAKE_SESSION_GAP = 15.0
 
 # 调试捕获环形缓冲区上限
 DEBUG_CAPTURE_MAX = 50

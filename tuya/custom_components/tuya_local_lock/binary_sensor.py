@@ -1,15 +1,22 @@
-"""涂鸦本地门锁 - 锁实体。"""
+"""涂鸦本地门锁 - 门锁状态传感器（binary_sensor，device_class: lock）。
+
+只负责显示/记录门锁状态，为只读实体：on = 已解锁，off = 已锁定。
+开锁动作由 button.网络开锁 承担（仅门铃唤醒窗口内可用）。
+门磁 FSM、外部状态同步、set_lock_state 服务均保留。
+"""
 
 import logging
 from typing import Any, Callable
 
 import voluptuous as vol
 
-from homeassistant.components.lock import LockEntity, LockEntityFeature
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME, STATE_OFF, STATE_ON
+from homeassistant.const import CONF_NAME, STATE_ON
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later, async_track_state_change
@@ -17,9 +24,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_AUTO_RELOCK_DELAY,
-    CONF_COMMAND_DP,
-    CONF_COMMAND_LOCK_VALUE,
-    CONF_COMMAND_UNLOCK_VALUE,
     CONF_DEVICE_ID,
     CONF_DEVICE_IP,
     CONF_EXTERNAL_STATE_ENTITY,
@@ -27,8 +31,6 @@ from .const import (
     CONF_MANUAL_UNLOCK_NAME,
     CONF_MANUAL_UNLOCK_RECORD,
     CONF_MANUAL_UNLOCK_WINDOW,
-    CONF_OPEN_DP,
-    CONF_OPEN_VALUE,
     CONF_PRODUCT_ID,
     CONF_PROTOCOL,
     CONF_SESSION_TIMEOUT,
@@ -54,12 +56,10 @@ FSM_MECHANICAL = "mechanical"    # 已确认室内机械开门
 
 SERVICE_SET_LOCK_STATE = "set_lock_state"
 ATTR_LOCKED = "locked"
-SET_LOCK_STATE_SCHEMA = vol.Schema(
-    {vol.Required(ATTR_LOCKED): bool}
-)
+SET_LOCK_STATE_SCHEMA = vol.Schema({vol.Required(ATTR_LOCKED): bool})
 
-# 记录所有已注册的锁实体（按 device_id 索引），供服务调用定位目标
-_registered_locks: dict[str, "TuyaLocalLock"] = {}
+# 记录所有已注册的门锁状态实体（按 device_id 索引），供服务调用定位目标
+_registered_entities: dict[str, "TuyaLockStateBinarySensor"] = {}
 
 
 async def async_setup_entry(
@@ -68,19 +68,20 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: TuyaLockCoordinator = hass.data[DOMAIN][entry.entry_id]
-    lock_entity = TuyaLocalLock(coordinator, entry)
-    async_add_entities([lock_entity])
+    entity = TuyaLockStateBinarySensor(coordinator, entry)
+    async_add_entities([entity])
 
-    # 注册服务：允许自动化手动设置门锁显示状态
+    # 注册服务：允许自动化手动设置门锁显示状态（不发送物理指令）
     if not hass.services.has_service(DOMAIN, SERVICE_SET_LOCK_STATE):
-        async def _handle_set_lock_state(call: ServiceCall) -> None:
+
+        def _handle_set_lock_state(call: ServiceCall) -> None:
             locked = call.data[ATTR_LOCKED]
-            # 可选指定目标设备；未指定则作用于所有锁实体
+            # 可选指定目标设备；未指定则作用于所有门锁状态实体
             target = call.data.get("device_id")
             targets = (
-                [_registered_locks[target]]
-                if target and target in _registered_locks
-                else list(_registered_locks.values())
+                [_registered_entities[target]]
+                if target and target in _registered_entities
+                else list(_registered_entities.values())
             )
             for ent in targets:
                 ent.set_display_lock_state(locked)
@@ -95,21 +96,23 @@ async def async_setup_entry(
         )
 
 
-class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
+class TuyaLockStateBinarySensor(
+    CoordinatorEntity[TuyaLockCoordinator], BinarySensorEntity
+):
+    """门锁状态：on = 已锁定，off = 已解锁（只读）。"""
+
     _attr_has_entity_name = True
     _attr_name = None
+    _attr_device_class = BinarySensorDeviceClass.LOCK
 
-    def __init__(self, coordinator: TuyaLockCoordinator, entry: ConfigEntry) -> None:
+    def __init__(
+        self, coordinator: TuyaLockCoordinator, entry: ConfigEntry
+    ) -> None:
         super().__init__(coordinator)
         opts = coordinator._data
         self._entry = entry
         self._state_dp = str(opts.get(CONF_STATE_DP, 0))
         self._state_true_is_locked = opts.get(CONF_STATE_TRUE_IS_LOCKED, True)
-        self._command_dp = str(opts.get(CONF_COMMAND_DP, 1))
-        self._command_lock_value = opts.get(CONF_COMMAND_LOCK_VALUE, True)
-        self._command_unlock_value = opts.get(CONF_COMMAND_UNLOCK_VALUE, False)
-        self._open_dp = opts.get(CONF_OPEN_DP, 0)
-        self._open_value = opts.get(CONF_OPEN_VALUE, True)
         unlock_dps = opts.get(CONF_UNLOCK_DP_LIST, "")
         self._unlock_dps: list[str] = (
             [s.strip() for s in str(unlock_dps).split(",") if s.strip()]
@@ -117,14 +120,18 @@ class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
             else []
         )
         self._auto_relock_delay = opts.get(CONF_AUTO_RELOCK_DELAY, 0)
-        self._unlock_relock_timer = None
+        self._unlock_relock_timer: Callable[[], None] | None = None
         self._last_seen_unlock_dps: dict[str, Any] = {}
         # 持久化解锁状态：解锁事件触发后置 True，自动回锁定时器到期后置 False
         self._unlocked = False
         # 外部状态来源（门磁等），优先级高于门锁自身推断
-        self._external_state_entity: str = opts.get(CONF_EXTERNAL_STATE_ENTITY, "")
-        self._external_state_invert: bool = opts.get(CONF_EXTERNAL_STATE_INVERT, False)
-        self._external_unsub: Any = None
+        self._external_state_entity: str = opts.get(
+            CONF_EXTERNAL_STATE_ENTITY, ""
+        )
+        self._external_state_invert: bool = opts.get(
+            CONF_EXTERNAL_STATE_INVERT, False
+        )
+        self._external_unsub: Callable[[], None] | None = None
         # 门磁 FSM：机械开门识别与记录
         self._manual_enabled: bool = opts.get(CONF_MANUAL_UNLOCK_RECORD, True)
         self._manual_name: str = (
@@ -149,10 +156,8 @@ class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
             manufacturer="Tuya",
             model=entry.data.get(CONF_PRODUCT_ID) or None,
         )
-        if self._open_dp:
-            self._attr_supported_features = LockEntityFeature.OPEN
         # 注册到全局表，供服务调用定位
-        _registered_locks[entry.data[CONF_DEVICE_ID]] = self
+        _registered_entities[entry.data[CONF_DEVICE_ID]] = self
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -192,7 +197,10 @@ class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
         self._race_unsub = None
         self._cancel_timer(self._session_unsub)
         self._session_unsub = None
-        _registered_locks.pop(self._entry.data[CONF_DEVICE_ID], None)
+        if self._unlock_relock_timer is not None:
+            self._unlock_relock_timer()
+            self._unlock_relock_timer = None
+        _registered_entities.pop(self._entry.data[CONF_DEVICE_ID], None)
         await super().async_will_remove_from_hass()
 
     @callback
@@ -285,6 +293,8 @@ class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
         self._cancel_timer(self._session_unsub)
         self._session_unsub = None
         self._fsm = FSM_ARMED
+        # 通知 coordinator 关门边沿，供开锁信号识别"门关后的新开锁"
+        self.coordinator.mark_door_closed()
 
     @callback
     def _on_electronic_unlock(self) -> None:
@@ -330,11 +340,20 @@ class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
         self.async_write_ha_state()
 
     @property
-    def is_locked(self) -> bool | None:
+    def is_on(self) -> bool | None:
+        """device_class: lock 约定：on = 已解锁，off = 已锁定。"""
+        locked = self._compute_is_locked()
+        return None if locked is None else not locked
+
+    def _compute_is_locked(self) -> bool | None:
+        """门锁是否已锁定（None = 未知）。"""
         # 外部状态来源（门磁）优先级最高：只要门磁可用，就强制用其状态
         if self._external_state_entity:
             state = self.hass.states.get(self._external_state_entity)
-            if state is not None and state.state not in ("unknown", "unavailable"):
+            if state is not None and state.state not in (
+                "unknown",
+                "unavailable",
+            ):
                 is_open = state.state == STATE_ON
                 if self._external_state_invert:
                     is_open = not is_open
@@ -374,8 +393,8 @@ class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
             self._unlock_relock_timer = None
         # 涂鸦门锁物理上会自动回锁，若用户未配置延时，使用 5 秒默认值
         delay = self._auto_relock_delay if self._auto_relock_delay > 0 else 5
-        self._unlock_relock_timer = self.hass.helpers.event.async_call_later(
-            delay, self._auto_relock
+        self._unlock_relock_timer = async_call_later(
+            self.hass, delay, self._auto_relock
         )
 
     async def _auto_relock(self, _now: Any) -> None:
@@ -406,32 +425,3 @@ class TuyaLocalLock(CoordinatorEntity[TuyaLockCoordinator], LockEntity):
                 if val is not None:
                     attrs[f"unlock_dp_{dp}"] = val
         return attrs
-
-    def _ensure_operable(self) -> None:
-        """门锁平时休眠，只有门铃唤醒窗口内才接受网络指令。"""
-        if not self.operable:
-            raise HomeAssistantError(
-                "门锁休眠中，无法网络操作。请先按门铃唤醒，"
-                f"然后在 {WAKE_OPERABLE_WINDOW} 秒内执行开锁。"
-            )
-
-    async def async_lock(self, **kwargs: Any) -> None:
-        self._ensure_operable()
-        await self.coordinator.async_send_command(
-            {self._command_dp: self._command_lock_value}
-        )
-        await self.coordinator.async_request_refresh()
-
-    async def async_unlock(self, **kwargs: Any) -> None:
-        self._ensure_operable()
-        await self.coordinator.async_send_command(
-            {self._command_dp: self._command_unlock_value}
-        )
-        await self.coordinator.async_request_refresh()
-
-    async def async_open_door(self, **kwargs: Any) -> None:
-        self._ensure_operable()
-        await self.coordinator.async_send_command(
-            {str(self._open_dp): self._open_value}
-        )
-        await self.coordinator.async_request_refresh()

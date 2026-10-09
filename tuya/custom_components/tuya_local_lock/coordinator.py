@@ -37,6 +37,7 @@ from .const import (
     DOMAIN,
     TCP_PUSH_FRAMES_MAX,
     TCP_PUSH_PROBE_SECONDS,
+    WAKE_SESSION_GAP,
 )
 from .udp import TuyaUdpListener
 
@@ -166,6 +167,11 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._electronic_unlock_listeners: list[Callable[[], None]] = []
         # 「最近开锁」记录传感器引用，门磁确认机械开门时写入
         self._unlock_record: Any = None
+        # 唤醒会话：时间上紧邻（WAKE_SESSION_GAP 秒内）的广播属于同一会话
+        self._wake_session_id: int = 0
+        self._last_broadcast_at: datetime | None = None
+        # 门磁最近一次关门（on→off）时间，供开锁信号识别"门关后的新开锁"
+        self._last_door_closed_at: datetime | None = None
         super().__init__(
             hass,
             _LOGGER,
@@ -213,8 +219,15 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self.data or {}
         if isinstance(result, dict) and "dps" in result:
             self._has_connected = True
-            _LOGGER.info("轮询获取到门锁 DPS: %r", result["dps"])
-            return result["dps"]
+            dps = result["dps"]
+            _LOGGER.info("轮询获取到门锁 DPS: %r", dps)
+            # 合并而非替换：唤醒窗口内可能读到增量/空的残缺 DPS 子集，
+            # 整体替换会抹掉电量等此前已有的 DP（与 UDP 推送路径行为一致）
+            if not dps:
+                return self.data or {}
+            merged = dict(self.data or {})
+            merged.update(dps)
+            return merged
         self._device = None
         if not self._has_connected:
             raise UpdateFailed(f"门锁返回异常数据: {result}")
@@ -266,6 +279,16 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         entry["ts"] = datetime.now().isoformat(timespec="seconds")
         if self._debug_capture:
             self._raw_captures.appendleft(entry)
+        if entry.get("is_mine"):
+            # 唤醒会话维护：距上一条本设备广播超过安静间隔 → 新会话
+            now_utc = dt_util.utcnow()
+            if (
+                self._last_broadcast_at is None
+                or now_utc - self._last_broadcast_at
+                > timedelta(seconds=WAKE_SESSION_GAP)
+            ):
+                self._wake_session_id += 1
+            self._last_broadcast_at = now_utc
         if self._history_enabled and entry.get("is_mine"):
             # 历史按时间正序：新的放最右；deque 满了自动淘汰最旧。
             # 只记录本设备广播，避免其他涂鸦设备刷屏
@@ -517,6 +540,11 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False
         return dt_util.utcnow() - self._wake_triggered_at <= timedelta(seconds=seconds)
 
+    @property
+    def wake_triggered_at(self) -> datetime | None:
+        """最近一次唤醒广播触发抓取的时间戳。"""
+        return self._wake_triggered_at
+
     # ---- 门磁 FSM 支持 ----
 
     def set_unlock_record(self, record: Any) -> None:
@@ -526,6 +554,21 @@ class TuyaLockCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     @property
     def unlock_record(self) -> Any:
         return self._unlock_record
+
+    @property
+    def wake_session_id(self) -> int:
+        """当前唤醒会话 ID（每次安静期后的新广播递增）。"""
+        return self._wake_session_id
+
+    @property
+    def last_door_closed_at(self) -> datetime | None:
+        """门磁最近一次关门边沿的时间。"""
+        return self._last_door_closed_at
+
+    @callback
+    def mark_door_closed(self) -> None:
+        """门磁 on→off（关门）时由锁实体调用。"""
+        self._last_door_closed_at = dt_util.utcnow()
 
     def add_electronic_unlock_listener(
         self, listener: Callable[[], None]

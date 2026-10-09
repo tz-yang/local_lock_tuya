@@ -122,17 +122,20 @@ class TuyaLockBattery(CoordinatorEntity[TuyaLockCoordinator], SensorEntity):
 class TuyaLockUnlockSignal(CoordinatorEntity[TuyaLockCoordinator], SensorEntity):
     """开锁信号（A）：收到解锁 DP 值 → 显示 → 写入 B（开锁记录）→ 重置为待机。
 
-    接收条件：值变化，或门铃唤醒窗口内的抓取（值不变也算——同一人
-    重复开锁 DP 值相同）。同一唤醒窗口内 30 秒去重，避免多次刷新重复计数。
-    状态自动在 3 秒后重置为"待机"，因此相同值也能产生状态变化，
-    自动化可用状态触发器捕获每一次开锁。
+    触发条件：
+    - DP 值变化：始终触发；
+    - DP 值不变（同一人重复开锁值相同）：仅当处于【新的唤醒会话】
+      （距上次广播安静 WAKE_SESSION_GAP 秒后的再次唤醒）或距上次触发后
+      门磁经历过【关门边沿】时才触发。
+    这样同一次开锁唤醒期内的多次 TCP 抓取只计一次，而门关后的连续
+    真实开锁（即使值完全相同）不会被漏掉。
+    状态自动在 3 秒后重置为"待机"，自动化可用状态触发器捕获每次开锁。
     """
 
     _attr_has_entity_name = True
     _attr_name = "开锁信号"
     _attr_icon = "mdi:gesture-tap-button"
     SIGNAL_RESET_DELAY = 3  # 秒
-    WAKE_DEDUP = 4  # 秒，连续开锁间隔 5 秒左右，4 秒可全部计数
 
     def __init__(
         self,
@@ -150,7 +153,10 @@ class TuyaLockUnlockSignal(CoordinatorEntity[TuyaLockCoordinator], SensorEntity)
         self._doorbell_dp = doorbell_dp
         self._signal = "待机"
         self._last_value: Any = None
-        self._last_fire_at: datetime | None = None
+        # 上次触发时的唤醒会话 ID；None = 尚未触发过
+        self._last_fire_session_id: int | None = None
+        # 上次触发时已知的最后关门时间，用于识别之后是否新关过门
+        self._last_seen_closed_at: datetime | None = None
         self._reset_unsub: Any = None
         self._attr_unique_id = f"{entry.data[CONF_DEVICE_ID]}_unlock_signal"
         self._attr_device_info = DeviceInfo(
@@ -170,11 +176,17 @@ class TuyaLockUnlockSignal(CoordinatorEntity[TuyaLockCoordinator], SensorEntity)
             current = data.get(dp)
             if current is None:
                 continue
-            now = datetime.now()
             value_changed = current != self._last_value
             in_wake = self.coordinator.wake_triggered_within(15)
-            dedup_ok = self._last_fire_at is None or (
-                now - self._last_fire_at >= timedelta(seconds=self.WAKE_DEDUP)
+            session_id = self.coordinator.wake_session_id
+            new_session = (
+                self._last_fire_session_id is not None
+                and session_id != self._last_fire_session_id
+            )
+            last_closed = self.coordinator.last_door_closed_at
+            door_closed_since = last_closed is not None and (
+                self._last_seen_closed_at is None
+                or last_closed > self._last_seen_closed_at
             )
             # 门铃排除：唤醒窗口内值未变、且门铃 DP 快照为 True →
             # 这次唤醒是门铃造成的，不算开锁
@@ -185,9 +197,10 @@ class TuyaLockUnlockSignal(CoordinatorEntity[TuyaLockCoordinator], SensorEntity)
                 and (data.get(self._doorbell_dp) is True)
             ):
                 break
-            if value_changed or (in_wake and dedup_ok):
+            if value_changed or (in_wake and (new_session or door_closed_since)):
                 self._last_value = current
-                self._last_fire_at = now
+                self._last_fire_session_id = session_id
+                self._last_seen_closed_at = last_closed
                 raw_str = str(current)
                 display = self._user_map.get(raw_str, raw_str)
                 self._signal = display
@@ -395,7 +408,8 @@ class TuyaLockBroadcastDebug(CoordinatorEntity[TuyaLockCoordinator], SensorEntit
         attrs: dict[str, Any]
         if self.coordinator.broadcast_history_enabled:
             attrs = {
-                "history": self.coordinator.broadcast_history,
+                # 存储为 append 正序，显示时反转 → 最新记录在上
+                "history": list(reversed(self.coordinator.broadcast_history)),
                 "max": BROADCAST_HISTORY_MAX,
                 "persisted": True,
             }
@@ -406,7 +420,9 @@ class TuyaLockBroadcastDebug(CoordinatorEntity[TuyaLockCoordinator], SensorEntit
                 "persisted": False,
             }
         if self.coordinator.tcp_push_probe_enabled:
-            attrs["tcp_push_frames"] = self.coordinator.tcp_push_frames
+            attrs["tcp_push_frames"] = list(
+                reversed(self.coordinator.tcp_push_frames)
+            )
             attrs["tcp_push_max"] = TCP_PUSH_FRAMES_MAX
             attrs["tcp_probe_running"] = self.coordinator.tcp_probe_running
         return attrs
@@ -464,12 +480,12 @@ class TuyaLockBroadcastPlain(CoordinatorEntity[TuyaLockCoordinator], SensorEntit
         )
 
     def _decoded_rows(self) -> list[dict[str, Any]]:
-        """从历史或内存缓冲中提取【本设备且解码成功】的记录（时间正序）。"""
+        """从历史或内存缓冲中提取【本设备且解码成功】的记录（最新在前）。"""
         if self.coordinator.broadcast_history_enabled:
             source = self.coordinator.broadcast_history  # append 正序
         else:
-            # raw_captures 为 appendleft 倒序，反转后正序
-            source = reversed(self.coordinator.raw_captures)
+            # raw_captures 为 appendleft 倒序（最新在前）
+            source = self.coordinator.raw_captures
         rows: list[dict[str, Any]] = []
         for item in source:
             decoded = item.get("decoded")
@@ -481,13 +497,15 @@ class TuyaLockBroadcastPlain(CoordinatorEntity[TuyaLockCoordinator], SensorEntit
                         "payload": decoded,
                     }
                 )
+        if self.coordinator.broadcast_history_enabled:
+            rows.reverse()  # 存储正序 → 显示最新在前
         return rows
 
     @property
     def native_value(self) -> str:
         rows = self._decoded_rows()
         if rows:
-            return _summarize_payload(rows[-1]["payload"])
+            return _summarize_payload(rows[0]["payload"])
         push = self.coordinator.tcp_push_frames
         if push:
             frame = push[-1].get("frame")
