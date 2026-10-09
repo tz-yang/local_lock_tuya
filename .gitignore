@@ -1,2 +1,4 @@
 __pycache__/
 *.pyc
+push.bat
+push.ps1
