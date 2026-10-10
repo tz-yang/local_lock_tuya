@@ -3,6 +3,13 @@
     "step": {
       "user": {
         "title": "Tuya Local Lock",
+        "menu_options": {
+          "manual": "Manual entry",
+          "qr": "Scan QR code (Smart Life)"
+        }
+      },
+      "manual": {
+        "title": "Tuya Local Lock",
         "description": "Enter the local connection info of the lock. Leave IP empty to auto-discover on LAN (UDP 6666).",
         "data": {
           "name": "Device Name",
@@ -13,11 +20,35 @@
           "product_id": "Product ID (optional)",
           "protocol": "Tuya Protocol Version"
         }
+      },
+      "qr": {
+        "title": "Smart Life Login",
+        "description": "Enter your Smart Life user code (Me → Settings → Account and Security → User Code).",
+        "data": {
+          "user_code": "User Code"
+        }
+      },
+      "qr_show": {
+        "title": "Scan QR Code",
+        "description": "Open the Smart Life app → tap + → Scan, scan this QR code, then tap 'Confirm login'. After confirming, click Submit below.\n\n{qr_image}",
+        "data": {}
+      },
+      "select_device": {
+        "title": "Select Lock",
+        "description": "Choose the door lock device. Device ID and Local Key will be filled in automatically.",
+        "data": {
+          "device_id": "Device",
+          "name": "Entity name (optional, defaults to device name)"
+        }
       }
     },
     "error": {
       "no_device_found": "Device not found on LAN. Make sure the lock is online or enter its IP manually.",
-      "cannot_connect": "Failed to connect. Check Device ID, Local Key and protocol version."
+      "cannot_connect": "Failed to connect. Check Device ID, Local Key and protocol version.",
+      "qr_failed": "Failed to obtain QR code. Check the user code.",
+      "login_not_confirmed": "Login not confirmed yet. Scan the QR code and tap Confirm in the Smart Life app, then try again.",
+      "fetch_devices_failed": "Failed to fetch device list. Please try again.",
+      "no_devices": "No devices found in this account."
     },
     "abort": {
       "already_configured": "This device is already configured."

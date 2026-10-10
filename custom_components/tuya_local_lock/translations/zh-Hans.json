@@ -3,6 +3,13 @@
     "step": {
       "user": {
         "title": "涂鸦本地门锁",
+        "menu_options": {
+          "manual": "手动填写",
+          "qr": "扫码获取（Smart Life）"
+        }
+      },
+      "manual": {
+        "title": "涂鸦本地门锁",
         "description": "填入门锁的本地连接信息。IP 留空将在局域网内自动发现（UDP 6666）。",
         "data": {
           "name": "设备名称",
@@ -13,11 +20,35 @@
           "product_id": "Product ID（产品 ID，可选）",
           "protocol": "涂鸦协议版本"
         }
+      },
+      "qr": {
+        "title": "Smart Life 登录",
+        "description": "输入 Smart Life 用户码（App → 我的 → 设置 → 账号与安全 → 用户码）。\n\n{detail}",
+        "data": {
+          "user_code": "用户码"
+        }
+      },
+      "qr_show": {
+        "title": "扫描二维码",
+        "description": "打开 Smart Life App → 点击右上角 + → 扫一扫，扫描下方二维码并点击「确认登录」。确认后点击下方「提交」。\n\n{qr_image}",
+        "data": {}
+      },
+      "select_device": {
+        "title": "选择门锁",
+        "description": "选择门锁设备，Device ID 和 Local Key 将自动填入。",
+        "data": {
+          "device_id": "设备",
+          "name": "实体名称（可选，默认为设备名）"
+        }
       }
     },
     "error": {
       "no_device_found": "局域网内未发现该设备，请确认门锁已联网，或手动填写 IP 地址。",
-      "cannot_connect": "连接门锁失败，请检查 Device ID、Local Key 和协议版本是否正确。"
+      "cannot_connect": "连接门锁失败，请检查 Device ID、Local Key 和协议版本是否正确。",
+      "qr_failed": "获取二维码失败，请检查用户码是否正确。",
+      "login_not_confirmed": "尚未确认登录，请在 Smart Life App 中扫码并点击「确认登录」后重试。",
+      "fetch_devices_failed": "获取设备列表失败，请重试。",
+      "no_devices": "该账号下未找到任何设备。"
     },
     "abort": {
       "already_configured": "该设备已被配置过。"
