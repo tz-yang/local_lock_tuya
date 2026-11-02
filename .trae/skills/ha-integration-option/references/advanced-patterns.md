@@ -181,3 +181,23 @@ action:
    - 按门铃 → 找值为 true 的 Boolean 键
    - 换电池/低电 → 找值为百分比的键
 4. 做配置说明时写明"填数字 dpId"，并给出"0 = 不启用"的惯例，避免用户把成员编号（DP 的值）误填进 DP 编号字段
+
+## 6. tinytuya 持久连接 API（版本相关，勿凭记忆写）
+
+tinytuya 1.20+ 模块化重构（`tinytuya/core/XenonDevice.py`）后，**没有 `connect()` 方法**——调用会报 `AttributeError: 'Device' object has no attribute 'connect'`。正确的持久连接模式（参照官方 examples/monitor.py）：
+
+```python
+d = tinytuya.Device(dev_id, address=ip, local_key=key, version=3.3,
+                    persist=True, connection_timeout=5)
+initial = d.status()        # 首次 status() 隐式建立并保持连接；应答不算主动推送
+while listening:
+    msg = d.receive()       # 读异步推送，connection_timeout 控制单次等待
+    d.heartbeat(nowait=True)  # 约 8-12 秒一次保活
+d.close()
+```
+
+要点：
+- 判断「设备是否主动推送」时，初始 `status()` 的应答要排除；带 `dps` 的后续帧才是主动帧，记录时加 `unsolicited` 标记
+- 探测任务通过 `hass.async_add_executor_job()` 在线程中跑，外层 `asyncio.wait_for` 超时 = 监听时长 + 建连耗时（不要只留监听时长）
+- 电池门锁只在唤醒窗口接受 TCP，探测必须在唤醒广播到达时**立即**与状态刷新并行启动
+- tinytuya 的具体 API 以 HA 环境实际安装版本为准（查 manifest requirements 和容器内源码），不要用网上旧示例的 `set_socketPersistent` / `generate_payload` 老写法猜测
