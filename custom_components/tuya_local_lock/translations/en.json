@@ -69,6 +69,7 @@
           "battery_dp": "Battery level DP index (0 = disabled)",
           "unlock_dp_list": "Unlock event DP list (comma-separated, e.g. 2,3)",
           "unlock_user_map": "Member ID mapping (one per line: id=name (method))",
+          "unlock_method_map": "Unlock method mapping (one per line: DP id=method)",
           "doorbell_dp": "Doorbell DP index (0 = disabled)",
           "auto_relock_delay": "Auto relock delay in seconds (0 = disabled)",
           "poll_interval": "Polling interval (seconds)",

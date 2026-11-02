@@ -21,6 +21,8 @@ CONF_POLL_INTERVAL = "poll_interval"
 CONF_BATTERY_DP = "battery_dp"
 CONF_UNLOCK_DP_LIST = "unlock_dp_list"
 CONF_UNLOCK_USER_MAP = "unlock_user_map"
+# 解锁方式映射：按开锁记录 DP 编号映射方式名（如 1=指纹），显示时拼接
+CONF_UNLOCK_METHOD_MAP = "unlock_method_map"
 CONF_AUTO_RELOCK_DELAY = "auto_relock_delay"
 CONF_DEBUG_CAPTURE = "debug_capture"
 

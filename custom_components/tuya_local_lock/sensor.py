@@ -22,14 +22,15 @@ from .const import (
     CONF_TCP_PUSH_PROBE,
     CONF_UNLOCK_DP_LIST,
     CONF_UNLOCK_USER_MAP,
+    CONF_UNLOCK_METHOD_MAP,
     DOMAIN,
     TCP_PUSH_FRAMES_MAX,
 )
 from .coordinator import TuyaLockCoordinator
 
 
-def _parse_user_map(raw: str) -> dict[str, str]:
-    """解析用户映射配置。支持每行一条或英文逗号/分号分隔，格式：编号=显示名。
+def _parse_map(raw: str) -> dict[str, str]:
+    """解析键值映射配置（成员映射/方式映射通用）。支持每行一条或英文逗号/分号分隔，格式：键=值。
 
     例："1=爸爸（指纹）\n2=爸爸（人脸）" 或 "1=爸爸（指纹）, 2=爸爸（人脸）"
     """
@@ -66,12 +67,13 @@ async def async_setup_entry(
     if doorbell_dp == "0":
         doorbell_dp = ""
     if unlock_dps:
-        user_map = _parse_user_map(coordinator._data.get(CONF_UNLOCK_USER_MAP, ""))
+        user_map = _parse_map(coordinator._data.get(CONF_UNLOCK_USER_MAP, ""))
+        method_map = _parse_map(coordinator._data.get(CONF_UNLOCK_METHOD_MAP, ""))
         record = TuyaLockLastUnlock(coordinator, entry, unlock_dps, user_map)
         # 注册给 coordinator，门磁 FSM 确认机械开门时写入同一份记录
         coordinator.set_unlock_record(record)
         signal = TuyaLockUnlockSignal(
-            coordinator, entry, unlock_dps, user_map, record, doorbell_dp
+            coordinator, entry, unlock_dps, user_map, method_map, record, doorbell_dp
         )
         entities += [signal, record]
     if doorbell_dp:
@@ -143,12 +145,14 @@ class TuyaLockUnlockSignal(CoordinatorEntity[TuyaLockCoordinator], SensorEntity)
         entry: ConfigEntry,
         unlock_dps: list[str],
         user_map: dict[str, str],
+        method_map: dict[str, str],
         record: "TuyaLockLastUnlock",
         doorbell_dp: str = "",
     ) -> None:
         super().__init__(coordinator)
         self._unlock_dps = unlock_dps
         self._user_map = user_map
+        self._method_map = method_map
         self._record = record
         self._doorbell_dp = doorbell_dp
         self._signal = "待机"
@@ -202,18 +206,34 @@ class TuyaLockUnlockSignal(CoordinatorEntity[TuyaLockCoordinator], SensorEntity)
                 self._last_fire_session_id = session_id
                 self._last_seen_closed_at = last_closed
                 raw_str = str(current)
+                method = self._method_map.get(dp, "")
                 display = self._user_map.get(raw_str, raw_str)
+                # 自动拼接方式：成员映射已是完整名（含括号）或已含方式字样时不重复拼接
+                if (
+                    method
+                    and method not in display
+                    and "（" not in display
+                    and "(" not in display
+                ):
+                    display = f"{display}（{method}）"
                 self._signal = display
                 self.async_write_ha_state()
                 self._schedule_reset()
                 # 写入 B（开锁记录）
-                self._record.record(dp=dp, raw_value=current, display=display)
+                self._record.record(
+                    dp=dp, raw_value=current, display=display, method=method
+                )
                 # 通知门磁 FSM：这是一次电子开锁（指纹/密码/App/室内按钮）
                 self.coordinator.notify_electronic_unlock()
                 # 广播事件：自动化可用事件触发器精确捕获每次开锁
                 self.hass.bus.async_fire(
                     f"{DOMAIN}_unlock_event",
-                    {"dp": dp, "raw_value": current, "display": display},
+                    {
+                        "dp": dp,
+                        "raw_value": current,
+                        "display": display,
+                        "method": method,
+                    },
                 )
             break  # 只取第一个有值的解锁 DP
         super()._handle_coordinator_update()
@@ -273,12 +293,15 @@ class TuyaLockLastUnlock(CoordinatorEntity[TuyaLockCoordinator], SensorEntity):
         )
 
     @callback
-    def record(self, dp: str, raw_value: Any, display: str) -> None:
+    def record(
+        self, dp: str, raw_value: Any, display: str, method: str = ""
+    ) -> None:
         self._count += 1
         self._last_event = {
             "dp": dp,
             "raw_value": raw_value,
             "display": display,
+            "method": method,
             "changed_at": datetime.now().isoformat(timespec="seconds"),
             "count": self._count,
         }
@@ -385,6 +408,8 @@ class TuyaLockBroadcastDebug(CoordinatorEntity[TuyaLockCoordinator], SensorEntit
     _attr_has_entity_name = True
     _attr_name = "广播调试"
     _attr_icon = "mdi:radio-tower"
+    # 报文明细体积大，排除 Recorder 存储，避免触发 16KB 属性上限告警
+    _unrecorded_attributes = frozenset({"history", "captures", "tcp_push_frames"})
 
     def __init__(self, coordinator: TuyaLockCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -469,6 +494,7 @@ class TuyaLockBroadcastPlain(CoordinatorEntity[TuyaLockCoordinator], SensorEntit
     _attr_has_entity_name = True
     _attr_name = "广播明文"
     _attr_icon = "mdi:text-box-check-outline"
+    _unrecorded_attributes = frozenset({"decoded", "tcp_push_frames"})
 
     def __init__(self, coordinator: TuyaLockCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)

@@ -36,6 +36,7 @@ from .const import (
     CONF_STATE_TRUE_IS_LOCKED,
     CONF_UNLOCK_DP_LIST,
     CONF_UNLOCK_USER_MAP,
+    CONF_UNLOCK_METHOD_MAP,
     CONF_UUID,
     CONF_DEBUG_CAPTURE,
     CONF_WAKE_REFRESH_DELAY,
@@ -113,6 +114,9 @@ OPTIONS_SCHEMA = vol.Schema(
         ),
         vol.Optional(CONF_UNLOCK_DP_LIST, default=""): str,
         vol.Optional(CONF_UNLOCK_USER_MAP, default=""): TextSelector(
+            TextSelectorConfig(multiline=True, type=TextSelectorType.TEXT)
+        ),
+        vol.Optional(CONF_UNLOCK_METHOD_MAP, default=""): TextSelector(
             TextSelectorConfig(multiline=True, type=TextSelectorType.TEXT)
         ),
         vol.Required(CONF_DOORBELL_DP, default=0): vol.All(

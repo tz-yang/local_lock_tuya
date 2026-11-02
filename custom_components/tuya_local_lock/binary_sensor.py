@@ -16,10 +16,19 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, STATE_ON
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import (
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    ServiceCall,
+    callback,
+)
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_call_later, async_track_state_change
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+)
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -163,7 +172,7 @@ class TuyaLockStateBinarySensor(
         await super().async_added_to_hass()
         # 订阅外部门磁状态变化，强制同步门锁显示状态
         if self._external_state_entity:
-            self._external_unsub = async_track_state_change(
+            self._external_unsub = async_track_state_change_event(
                 self.hass,
                 self._external_state_entity,
                 self._async_external_state_changed,
@@ -205,8 +214,9 @@ class TuyaLockStateBinarySensor(
 
     @callback
     def _async_external_state_changed(
-        self, entity_id: str, old_state: Any, new_state: Any
+        self, event: Event[EventStateChangedData]
     ) -> None:
+        new_state = event.data["new_state"]
         if new_state is None:
             return
         self._apply_external_state(new_state.state)
